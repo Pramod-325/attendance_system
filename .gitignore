@@ -1,0 +1,48 @@
+# IDE specific
+.idea
+.ipynb_checkpoints
+.mypy_cache
+.vscode
+*~
+.*.sw?
+.cache
+
+Pipfile.lock
+# macOS
+.DS_Store
+
+.codspeed
+
+# Byte-compiled / optimized / DLL modules
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Configuration and Secrets
+.env
+.env.*
+!.env.example
+
+# Testing and Coverage
+.pytest_cache/
+.coverage*
+htmlcov/
+
+# Linters and Type Checkers
+.mypy_cache/
+.ruff_cache/
+
+# Packaging and Distributions
+build/
+dist/
+*.egg-info/
+
+
+scaffold.py

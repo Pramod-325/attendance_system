@@ -1,1 +1,1 @@
-## Modern Attendance System using Java
+## Modern Attendance System using Python
