@@ -1,12 +1,14 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from typing import List
 import numpy as np
 
+# IMPORT AsyncSessionLocal directly
+from app.database import AsyncSessionLocal 
 from app.models import Student, AttendanceLog
 from app.services.vision_service import VisionService
+from sqlalchemy.ext.asyncio import AsyncSession
 
 executor = ThreadPoolExecutor(max_workers=4)
 vision_service = VisionService()
@@ -55,45 +57,55 @@ async def process_registration_images(images: List[bytes], name: str, db: AsyncS
     return {"status": "success", "message": "Student successfully enrolled."}
 
 
-async def process_attendance_frame(image_bytes: bytes, db: AsyncSession):
+async def process_attendance_frame(image_bytes: bytes) -> dict:
     loop = asyncio.get_running_loop()
     
     try:
-        live_embedding = await loop.run_in_executor(executor, vision_service.extract_embedding, image_bytes)
+        live_embedding = await loop.run_in_executor(
+            executor, 
+            vision_service.extract_embedding, 
+            image_bytes
+        )
     except Exception as e:
-        return
+        return {"status": "error", "message": "Could not extract facial features."}
 
-    # --- EXISTING: FIND CLOSEST MATCH ---
-    query = text("""
-        SELECT id, name, face_embedding <=> :live_vector AS distance 
-        FROM students 
-        ORDER BY distance ASC 
-        LIMIT 1
-    """)
-    
-    result = await db.execute(query, {"live_vector": str(live_embedding.tolist())})
-    closest_match = result.fetchone()
+    live_embedding_list = live_embedding.tolist()
 
-    if closest_match and closest_match.distance < 0.4:
-        student_id = closest_match.id
+    async with AsyncSessionLocal() as db:
+        try:
+            query = text("""
+                SELECT id, name, face_embedding <=> :live_vector AS distance 
+                FROM students 
+                ORDER BY distance ASC 
+                LIMIT 1
+            """)
+            
+            result = await db.execute(query, {"live_vector": str(live_embedding_list)})
+            closest_match = result.fetchone()
+
+            if closest_match and closest_match.distance < 0.4:
+                student_id = closest_match.id
+                
+                check_query = text("""
+                    SELECT id FROM attendance_logs 
+                    WHERE student_id = :student_id 
+                    AND DATE(timestamp) = CURRENT_DATE
+                """)
+                
+                check_result = await db.execute(check_query, {"student_id": student_id})
+                already_marked = check_result.fetchone()
+
+                if already_marked:
+                    return {"status": "warning", "message": f"{closest_match.name} is already marked present today."}
+
+                new_log = AttendanceLog(student_id=student_id)
+                db.add(new_log)
+                await db.commit()
+                return {"status": "success", "message": f"✅ Attendance marked for {closest_match.name}!"}
+            
+            else:
+                return {"status": "not_found", "message": "No matching student recognized."}
         
-        # --- NEW: DAILY ATTENDANCE DEDUPLICATION ---
-        # Checks if this specific student already has a log for today
-        check_query = text("""
-            SELECT id FROM attendance_logs 
-            WHERE student_id = :student_id 
-            AND DATE(timestamp) = CURRENT_DATE
-        """)
-        
-        check_result = await db.execute(check_query, {"student_id": student_id})
-        already_marked = check_result.fetchone()
-
-        if already_marked:
-            print(f"⚠️ {closest_match.name} was already marked present today. Skipping.")
-            return
-
-        # If not marked today, insert the log
-        new_log = AttendanceLog(student_id=student_id)
-        db.add(new_log)
-        await db.commit()
-        print(f"✅ Attendance marked for: {closest_match.name}")
+        except Exception as db_error:
+            await db.rollback()
+            return {"status": "error", "message": "Database error occurred."}
