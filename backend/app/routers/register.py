@@ -29,6 +29,9 @@ async def register_student(
         raise HTTPException(status_code=409, detail=result["message"])
         
     elif result["status"] == "error":
+        # Check if error message indicates bad frames and return 400 instead of 500
+        if "Could not extract face data" in result["message"]:
+             raise HTTPException(status_code=400, detail=result["message"])
         raise HTTPException(status_code=500, detail=result["message"])
 
     return {"message": result["message"]}
