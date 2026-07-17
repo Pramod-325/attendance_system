@@ -21,11 +21,13 @@ async def process_registration_images(images: List[bytes], name: str, db: AsyncS
         try:
             embedding = await loop.run_in_executor(executor, vision_service.extract_embedding, img_bytes)
             embeddings.append(embedding)
+        except ValueError as ve:
+            print(f"Validation failed for frame: {ve}")
         except Exception as e:
             print(f"Error processing frame: {e}")
     
     if not embeddings:
-        return {"status": "error", "message": "Could not extract face data from images."}
+        return {"status": "error", "message": "Could not extract face data from any images. Please ensure good lighting and clear view of face."}
 
     avg_embedding = np.mean(embeddings, axis=0)
     avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
@@ -66,6 +68,8 @@ async def process_attendance_frame(image_bytes: bytes) -> dict:
             vision_service.extract_embedding, 
             image_bytes
         )
+    except ValueError as ve:
+        return {"status": "error", "message": str(ve)}
     except Exception as e:
         return {"status": "error", "message": "Could not extract facial features."}
 

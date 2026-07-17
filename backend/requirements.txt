@@ -9,3 +9,4 @@ python-multipart==0.0.29
 python-dotenv==1.2.2
 pydantic==2.13.4
 numpy==2.4.6
+mediapipe==0.10.14
