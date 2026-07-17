@@ -9,37 +9,60 @@ export default function AttendanceScanner() {
   const { captureSingleFrame } = useWebcamCapture(webcamRef);
   
   const [isActive, setIsActive] = useState(false);
-  const [lastLog, setLastLog] = useState('Awaiting scan...');
+  
+  // Update state to hold both the message and the status type
+  const [log, setLog] = useState({ message: 'Awaiting scan...', type: 'info' });
+  
+  const isProcessingRef = useRef(false);
 
   useEffect(() => {
     let intervalId;
 
     const analyzeFrame = async () => {
-      if (!isActive) return;
+      if (!isActive || isProcessingRef.current) return;
       
       const blob = captureSingleFrame();
       if (!blob) return;
+
+      isProcessingRef.current = true;
+      setLog({ message: 'Analyzing frame...', type: 'info' });
 
       const formData = new FormData();
       formData.append('image', blob, 'live_frame.jpg');
 
       try {
-        // We use a non-blocking background post
-        apiClient.post('/attendance', formData);
-        setLastLog(`Frame analyzed at ${new Date().toLocaleTimeString()}`);
+        // Await the response from the server
+        const response = await apiClient.post('/attendance', formData);
+        
+        // Update the UI with the exact message from the Python backend!
+        setLog({ 
+          message: response.data.message, 
+          type: response.data.status 
+        });
+
       } catch (error) {
-        console.warn("Frame analysis failed:", error);
+        setLog({ message: 'Network error connecting to AI server.', type: 'error' });
+      } finally {
+        isProcessingRef.current = false;
       }
     };
 
     if (isActive) {
-      // Poll every 3 seconds to balance server load and responsiveness
       intervalId = setInterval(analyzeFrame, 3000);
     }
 
-    // Cleanup interval on unmount or toggle
     return () => clearInterval(intervalId);
   }, [isActive, captureSingleFrame]);
+
+  // Determine the background color based on the AI's status
+  const getLogColor = () => {
+    switch(log.type) {
+      case 'success': return 'bg-emerald-100 text-emerald-800 border-emerald-300';
+      case 'warning': return 'bg-amber-100 text-amber-800 border-amber-300';
+      case 'error': return 'bg-red-100 text-red-800 border-red-300';
+      default: return 'bg-gray-50 text-gray-500 border-gray-200';
+    }
+  };
 
   return (
     <div className="max-w-md mx-auto bg-white rounded-xl shadow-md overflow-hidden p-6 border border-gray-100">
@@ -66,7 +89,7 @@ export default function AttendanceScanner() {
 
       <button
         onClick={() => setIsActive(!isActive)}
-        className={`w-full font-medium py-3 px-4 rounded-lg flex justify-center items-center gap-2 transition ${
+        className={`w-full font-medium py-3 px-4 rounded-lg flex justify-center items-center gap-2 transition mb-4 ${
           isActive ? 'bg-red-50 hover:bg-red-100 text-red-700' : 'bg-emerald-600 hover:bg-emerald-700 text-white'
         }`}
       >
@@ -74,8 +97,9 @@ export default function AttendanceScanner() {
         {isActive ? 'Halt Surveillance Loop' : 'Initialize Live Scanning'}
       </button>
 
-      <div className="mt-4 text-center text-xs text-gray-500 font-mono bg-gray-50 py-2 rounded">
-        {lastLog}
+      {/* Dynamic Status Box */}
+      <div className={`text-center text-sm font-medium py-3 px-4 rounded border transition-colors duration-300 ${getLogColor()}`}>
+        {log.message}
       </div>
     </div>
   );
