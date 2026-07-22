@@ -21,7 +21,7 @@ app = FastAPI(title="Edge AI Attendance Backend", lifespan=lifespan)
 # CORS configuration to allow the React frontend to communicate
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "https://attendance-system-sharath.netlify.app","https://studious-robot-x5wjvqjjqqq6hq55-5173.app.github.dev"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "https://attendance-system-sharath.netlify.app","https://studious-robot-x5wjvqjjqqq6hq55-5173.app.github.dev"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
