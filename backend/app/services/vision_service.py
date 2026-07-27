@@ -1,108 +1,57 @@
 import cv2
 import numpy as np
-import onnxruntime as ort
-import os
-import mediapipe as mp
+import torch
+from PIL import Image
+from facenet_pytorch import MTCNN, InceptionResnetV1
 
 class VisionService:
     def __init__(self):
-        # Determine model path (ensure the models/ directory exists at the root)
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        model_path = os.path.join(base_dir, "models", "mobilefacenet.onnx")
+        # Force CPU execution to completely bypass Apple Silicon MPS pooling bugs
+        self.device = torch.device('cpu')
+        print("🚀 INITIALIZING VISION ENGINE ON: CPU (Bypassing MPS constraints)")
         
-        # Initialize Mediapipe Face Detection
-        self.mp_face_detection = mp.solutions.face_detection
-        self.face_detection = self.mp_face_detection.FaceDetection(
-            model_selection=1, min_detection_confidence=0.5
-        )
+        # Initialize MTCNN on CPU
+        self.mtcnn = MTCNN(keep_all=False, device=self.device)
         
-        try:
-            self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
-            self.input_name = self.session.get_inputs()[0].name
-        except Exception as e:
-            print(f"Warning: Could not load ONNX model at {model_path}. Error: {e}")
-            self.session = None
+        # Initialize ResNet on CPU
+        self.resnet = InceptionResnetV1(pretrained='vggface2').eval().to(self.device)
+        print("✅ PyTorch Models Loaded Successfully on CPU.")
 
-    def passes_quality_gates(self, img: np.ndarray) -> bool:
-        # Convert to grayscale
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        # 1. Blur Detection using Variance of Laplacian
-        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-        if laplacian_var < 100:  # Threshold for blurriness (tune as needed)
-            print(f"Frame rejected: Too blurry (Variance: {laplacian_var})")
-            return False
-
-        # 2. Luminance Check
-        avg_luminance = np.mean(gray)
-        if avg_luminance < 40:  # Threshold for darkness
-            print(f"Frame rejected: Too dark (Luminance: {avg_luminance})")
-            return False
-        if avg_luminance > 240: # Threshold for too bright / washed out
-            print(f"Frame rejected: Too bright (Luminance: {avg_luminance})")
-            return False
-
-        return True
-
-    def detect_and_crop_face(self, img: np.ndarray) -> np.ndarray:
-        image_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        results = self.face_detection.process(image_rgb)
-
-        if not results.detections:
-            return None
-
-        # Assume the first detected face is the primary one
-        detection = results.detections[0]
-        bboxC = detection.location_data.relative_bounding_box
-
-        ih, iw, _ = img.shape
-        x = int(bboxC.xmin * iw)
-        y = int(bboxC.ymin * ih)
-        w = int(bboxC.width * iw)
-        h = int(bboxC.height * ih)
-
-        # Add a slight margin (e.g., 10%)
-        margin_x = int(w * 0.1)
-        margin_y = int(h * 0.1)
-
-        x1 = max(0, x - margin_x)
-        y1 = max(0, y - margin_y)
-        x2 = min(iw, x + w + margin_x)
-        y2 = min(ih, y + h + margin_y)
-
-        cropped_face = img[y1:y2, x1:x2]
-        return cropped_face
-        
-    def extract_embedding(self, image_bytes: bytes) -> np.ndarray:
-        # 1. Decode raw bytes to OpenCV image
+    def extract_faces_and_embeddings(self, image_bytes: bytes) -> dict:
         np_arr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
         if img is None:
-            raise ValueError("Could not decode image bytes")
+            return {"embeddings": [], "spoof_detected": False}
 
-        # 2. Apply Quality Gates
-        if not self.passes_quality_gates(img):
-            raise ValueError("Quality gate failed: image is too blurry or improperly lit")
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        pil_img = Image.fromarray(img_rgb)
 
-        # 3. Detect and Crop Face
-        cropped_face = self.detect_and_crop_face(img)
-        if cropped_face is None or cropped_face.size == 0:
-            raise ValueError("No face detected in the image")
+        valid_embeddings = []
+        spoof_detected = False
 
-        if not self.session:
-            # Fallback for testing if model isn't downloaded yet
-            return np.random.rand(512).astype(np.float32)
+        try:
+            # 1. Find Face and Crop perfectly on CPU
+            face_tensor = self.mtcnn(pil_img)
+            
+            if face_tensor is None:
+                print("🔎 PYTORCH: No faces found in frame.")
+                return {"embeddings": [], "spoof_detected": False}
 
-        # 4. Preprocess to fit MobileFaceNet inputs (112x112)
-        img_resized = cv2.resize(cropped_face, (112, 112))
-        img_blob = img_resized.astype(np.float32) / 255.0
-        img_blob = np.transpose(img_blob, (2, 0, 1)) # HWC to CHW
-        img_blob = np.expand_dims(img_blob, axis=0) # Add batch dimension
-        
-        # 5. Run AI Inference
-        inputs = {self.input_name: img_blob}
-        embedding = self.session.run(None, inputs)[0][0]
-        
-        # L2 Normalize the embedding for cosine similarity
-        embedding = embedding / np.linalg.norm(embedding)
-        return embedding
+            # 2. Prepare tensor
+            face_tensor = face_tensor.unsqueeze(0).to(self.device)
+            
+            # 3. Extract the 512-Dimension Vector
+            with torch.no_grad():
+                embedding = self.resnet(face_tensor).cpu().numpy()[0]
+            
+            # 4. Normalize for PostgreSQL Cosine distance
+            embedding = embedding / np.linalg.norm(embedding)
+            valid_embeddings.append(embedding)
+            
+            print("✅ SUCCESS: Face detected and vectorized on CPU!")
+            
+        except Exception as e:
+            print(f"🛑 PYTORCH CRASH: {e}")
+
+        return {"embeddings": valid_embeddings, "spoof_detected": spoof_detected}
