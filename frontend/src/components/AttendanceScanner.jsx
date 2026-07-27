@@ -1,66 +1,47 @@
-import React, { useRef, useState, useEffect } from 'react';
-import Webcam from 'react-webcam';
-import { ScanFace, Activity } from 'lucide-react';
+import React, { useState } from 'react';
+import { ScanFace, Activity, RefreshCw } from 'lucide-react';
 import apiClient from '../api/client';
-import { useWebcamCapture } from '../hooks/useWebcamCapture';
+import ActiveLiveness from './ActiveLiveness';
 
 export default function AttendanceScanner() {
-  const webcamRef = useRef(null);
-  const { captureSingleFrame } = useWebcamCapture(webcamRef);
-  
-  const [isActive, setIsActive] = useState(false);
-  
-  // Update state to hold both the message and the status type
-  const [log, setLog] = useState({ message: 'Awaiting scan...', type: 'info' });
-  
-  const isProcessingRef = useRef(false);
+  const [log, setLog] = useState({ message: 'Complete the challenges to mark attendance.', type: 'info' });
+  const [resetKey, setResetKey] = useState(0);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  useEffect(() => {
-    let intervalId;
+  const handleLivenessPassed = async (verifiedBlob) => {
+    setIsProcessing(true);
+    setLog({ message: 'Transmitting verified frame to AI server...', type: 'info' });
 
-    const analyzeFrame = async () => {
-      if (!isActive || isProcessingRef.current) return;
-      
-      const blob = captureSingleFrame();
-      if (!blob) return;
+    const formData = new FormData();
+    formData.append('image', verifiedBlob, 'verified_live_frame.jpg');
 
-      isProcessingRef.current = true;
-      setLog({ message: 'Analyzing frame...', type: 'info' });
-
-      const formData = new FormData();
-      formData.append('image', blob, 'live_frame.jpg');
-
-      try {
-        // Await the response from the server
-        const response = await apiClient.post('/attendance', formData);
-        
-        // Update the UI with the exact message from the Python backend!
-        setLog({ 
-          message: response.data.message, 
-          type: response.data.status 
-        });
-
-      } catch (error) {
-        setLog({ message: 'Network error connecting to AI server.', type: 'error' });
-      } finally {
-        isProcessingRef.current = false;
-      }
-    };
-
-    if (isActive) {
-      intervalId = setInterval(analyzeFrame, 3000);
+    try {
+      const response = await apiClient.post('/attendance', formData);
+      setLog({
+        message: response.data.message || 'Attendance Logged!',
+        type: response.data.status || 'success'
+      });
+    } catch (error) {
+      setLog({
+        message: error.response?.data?.detail || 'Face not recognized or network error.',
+        type: 'error'
+      });
+    } finally {
+      setIsProcessing(false);
     }
+  };
 
-    return () => clearInterval(intervalId);
-  }, [isActive, captureSingleFrame]);
+  const handleResetScanner = () => {
+    setLog({ message: 'Complete the challenges to mark attendance.', type: 'info' });
+    setResetKey(prev => prev + 1);
+  };
 
-  // Determine the background color based on the AI's status
   const getLogColor = () => {
-    switch(log.type) {
+    switch (log.type) {
       case 'success': return 'bg-emerald-100 text-emerald-800 border-emerald-300';
       case 'warning': return 'bg-amber-100 text-amber-800 border-amber-300';
       case 'error': return 'bg-red-100 text-red-800 border-red-300';
-      default: return 'bg-gray-50 text-gray-500 border-gray-200';
+      default: return 'bg-blue-50 text-blue-800 border-blue-200';
     }
   };
 
@@ -72,34 +53,25 @@ export default function AttendanceScanner() {
           <h2 className="text-xl font-semibold text-gray-800">Classroom Scanner</h2>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">Status:</span>
-          <div className={`w-3 h-3 rounded-full ${isActive ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`} />
+          <span className="text-sm text-gray-500">Mode:</span>
+          <span className="px-2 py-0.5 text-xs font-bold rounded bg-emerald-100 text-emerald-700">Active Liveness</span>
         </div>
       </div>
 
-      <div className="relative rounded-lg overflow-hidden bg-gray-900 aspect-video mb-4 ring-4 ring-gray-100">
-        <Webcam
-          audio={false}
-          ref={webcamRef}
-          screenshotFormat="image/jpeg"
-          videoConstraints={{ facingMode: "environment", width: 640, height: 480 }}
-          className="w-full h-full object-cover"
-        />
-      </div>
+      <ActiveLiveness onVerified={handleLivenessPassed} resetTrigger={resetKey} />
 
-      <button
-        onClick={() => setIsActive(!isActive)}
-        className={`w-full font-medium py-3 px-4 rounded-lg flex justify-center items-center gap-2 transition mb-4 ${
-          isActive ? 'bg-red-50 hover:bg-red-100 text-red-700' : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-        }`}
-      >
-        <Activity size={20} />
-        {isActive ? 'Halt Surveillance Loop' : 'Initialize Live Scanning'}
-      </button>
+      <div className="mt-4 flex flex-col gap-3">
+        <div className={`text-center text-sm font-medium py-3 px-4 rounded border transition-colors duration-300 ${getLogColor()}`}>
+          {isProcessing ? 'Processing face vector...' : log.message}
+        </div>
 
-      {/* Dynamic Status Box */}
-      <div className={`text-center text-sm font-medium py-3 px-4 rounded border transition-colors duration-300 ${getLogColor()}`}>
-        {log.message}
+        <button
+          onClick={handleResetScanner}
+          className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2.5 px-4 rounded-lg flex justify-center items-center gap-2 transition"
+        >
+          <RefreshCw size={18} />
+          Scan Next Student
+        </button>
       </div>
     </div>
   );

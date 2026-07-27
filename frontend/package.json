@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.35",
     "@tailwindcss/vite": "^4.3.3",
     "axios": "^1.18.1",
     "lucide-react": "^1.25.0",
